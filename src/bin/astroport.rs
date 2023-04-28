@@ -42,6 +42,47 @@ pub const ABSTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 #[derive(Serialize, Deserialize, Debug)]
 struct JSONResponse(HashMap<String, String>);
 
+pub struct ChainRegistry {
+    asset_lists: Vec<AssetList>,
+}
+impl ChainRegistry {
+    pub async fn new() -> anyhow::Result<Self> {
+        let asset_lists = Self::fetch_asset_lists().await?;
+        Ok(Self { asset_lists })
+    }
+
+    async fn fetch_asset_lists() -> anyhow::Result<Vec<AssetList>> {
+        // check for cache dir
+        if !Path::new("cache/asset_lists").exists() {
+            std::fs::create_dir_all("cache/asset_lists")?;
+        }
+
+
+        let mut lists = Vec::with_capacity(ALL_CHAINS.len());
+        for chain in ALL_CHAINS {
+            // check cache
+            let file_name = format!("cache/asset_lists/{}.json", chain);
+            if Path::new(&file_name).exists() {
+                let json = std::fs::read_to_string(file_name)?;
+                let list: AssetList = serde_json::from_str(&json)?;
+                lists.push(list);
+                continue;
+            }
+
+            let list = AssetList::fetch(chain.to_string(), None).await.ok().unwrap();
+            let json = serde_json::to_string(&list)?;
+            std::fs::write(file_name, json)?;
+            lists.push(list);
+        }
+
+        Ok(lists)
+    }
+
+    pub fn get_asset_lists(&self) -> &[AssetList] {
+        &self.asset_lists
+    }
+}
+
 pub async fn fetch_astroport_address(url: &str, key: &str) -> Result<String, Error> {
     let response_text = reqwest::get(url).await?.text().await?;
 
@@ -72,38 +113,11 @@ pub async fn fetch_astroport_address(url: &str, key: &str) -> Result<String, Err
 
     Ok(key_address.to_string())
 }
-
 const ASTROPORT_PHOENIX_ADDRS: &str = "https://raw.githubusercontent.com/astroport-fi/astroport-changelog/main/terra-2/phoenix-1/core_phoenix.json";
+
 const ASTROPORT_PISCO_ADDRS: &str = "https://raw.githubusercontent.com/astroport-fi/astroport-changelog/main/terra-2/pisco-1/core_pisco.json";
 
 const DEX_NAME: &str = "astroport";
-
-async fn fetch_asset_lists() -> anyhow::Result<Vec<AssetList>> {
-    // check for cache dir
-    if !Path::new("cache/asset_lists").exists() {
-        std::fs::create_dir_all("cache/asset_lists")?;
-    }
-
-
-    let mut lists = Vec::with_capacity(ALL_CHAINS.len());
-    for chain in ALL_CHAINS {
-        // check cache
-        let file_name = format!("cache/asset_lists/{}.json", chain);
-        if Path::new(&file_name).exists() {
-            let json = std::fs::read_to_string(file_name)?;
-            let list: AssetList = serde_json::from_str(&json)?;
-            lists.push(list);
-            continue;
-        }
-
-        let list = AssetList::fetch(chain.to_string(), None).await.ok().unwrap();
-        let json = serde_json::to_string(&list)?;
-        std::fs::write(file_name, json)?;
-        lists.push(list);
-    }
-
-    Ok(lists)
-}
 
 /// Script that registers the first Account in abstract (our Account)
 pub fn astroport_ans(network: ChainInfo) -> anyhow::Result<()> {
@@ -122,7 +136,9 @@ pub fn astroport_ans(network: ChainInfo) -> anyhow::Result<()> {
         _ => panic!("Network not supported"),
     };
 
-    let asset_lists = rt.block_on(fetch_asset_lists())?;
+    let chain_registry = rt.block_on(ChainRegistry::new())?;
+
+    let asset_lists = chain_registry.get_asset_lists();
 
     let _ibc = Ibc::new(chain.state.grpc_channel.clone());
 
