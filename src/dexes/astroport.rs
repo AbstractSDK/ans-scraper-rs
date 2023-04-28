@@ -1,16 +1,15 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use abstract_core::objects::pool_id::UncheckedPoolAddress;
 use abstract_core::objects::{AssetEntry, PoolMetadata, PoolType};
-use astroport::asset::{AssetInfo, PairInfo};
+use astroport::asset::{AssetInfo as AstroportAssetInfo, PairInfo};
 use astroport::factory::{AstroportFactory, PairType, PairsResponse, QueryMsgFns};
 use cosmwasm_std::Addr;
-use cw20::{Cw20QueryMsg, TokenInfoResponse};
-use cw_asset::AssetInfoUnchecked;
-use cw_orch::{queriers::DaemonQuerier, Contract, ContractInstance, CwEnv, Daemon};
+
+use cw_asset::AssetInfo;
+use cw_orch::{queriers::DaemonQuerier, ContractInstance, CwEnv, Daemon};
 use reqwest::Error;
 
-use crate::helpers::chain_registry::ChainRegistry;
 use crate::traits::dex::{AssetSource, DexId, DexScraper};
 
 const ASTROPORT_PHOENIX_ADDRS: &str = "https://raw.githubusercontent.com/astroport-fi/astroport-changelog/main/terra-2/phoenix-1/core_phoenix.json";
@@ -20,11 +19,9 @@ const ASTROPORT_DEX: &str = "astroport";
 
 pub struct AstroportScraper<Chain: CwEnv> {
     chain: Chain,
-    chain_ans_prefix: String,
-    chain_registry: ChainRegistry,
     factory: AstroportFactory<Chain>,
-    _all_pairs: Vec<PairInfo>,
-    asset_info_to_name: HashMap<AssetInfo, String>,
+    loaded_pairs: Vec<PairInfo>,
+    asset_info_to_name: HashMap<AstroportAssetInfo, String>,
 }
 
 impl<T: cw_orch::TxHandler> DexId for AstroportScraper<T> {
@@ -34,7 +31,7 @@ impl<T: cw_orch::TxHandler> DexId for AstroportScraper<T> {
 }
 
 impl AstroportScraper<Daemon> {
-    pub async fn new(chain: Daemon, chain_ans_prefix: &str) -> Self {
+    pub async fn new(chain: Daemon) -> Self {
         let factory_address =
             Self::fetch_deployment_address(chain.state.chain_id.as_str(), "factory_address")
                 .await
@@ -48,18 +45,15 @@ impl AstroportScraper<Daemon> {
 
         Self {
             chain,
-            // TODO: elsewhere
-            chain_ans_prefix: chain_ans_prefix.to_string(),
-            chain_registry: ChainRegistry::new().await.unwrap(),
             factory,
-            _all_pairs: vec![],
+            loaded_pairs: vec![],
             asset_info_to_name: HashMap::new(),
         }
     }
 
-    fn all_pairs(&mut self) -> anyhow::Result<Vec<PairInfo>> {
+    fn load_pairs(&mut self) -> anyhow::Result<Vec<PairInfo>> {
         // Fetch pairs if not already done
-        if self._all_pairs.is_empty() {
+        if self.loaded_pairs.is_empty() {
             let mut all_pairs = vec![];
             let mut start_after_pair = None;
             loop {
@@ -70,20 +64,13 @@ impl AstroportScraper<Daemon> {
                 all_pairs.append(&mut pairs);
                 start_after_pair = all_pairs.last().map(|p| p.asset_infos.to_vec());
             }
-            self._all_pairs = all_pairs;
+            self.loaded_pairs = all_pairs;
         }
 
-        Ok(self._all_pairs.clone())
+        Ok(self.loaded_pairs.clone())
     }
 
-    fn all_asset_infos(&mut self) -> anyhow::Result<HashSet<AssetInfo>> {
-        Ok(self
-            .all_pairs()?
-            .iter()
-            .flat_map(|p| p.asset_infos.to_vec())
-            .collect())
-    }
-
+    /// Get a deployment address for astroprt given its chainId and key
     async fn fetch_deployment_address(chain_id: &str, key: &str) -> Result<String, Error> {
         let url = match chain_id {
             "phoenix-1" => ASTROPORT_PHOENIX_ADDRS,
@@ -126,44 +113,61 @@ impl AstroportScraper<Daemon> {
 }
 
 impl AssetSource for AstroportScraper<Daemon> {
-    fn fetch_asset_infos(&mut self) -> anyhow::Result<Vec<(String, AssetInfoUnchecked)>> {
-        let mut not_found_assets = vec![];
+    // fn fetch_asset_infos(&mut self) -> anyhow::Result<Vec<(String, AssetInfo)>> {
+    //     let mut not_found_assets = vec![];
+    //
+    //     let mut ans_assets_to_add = Vec::<(String, AssetInfo)>::new();
+    //
+    //     for asset_info in self.all_asset_infos()? {
+    //         let (name, unchecked_info) = match &asset_info {
+    //             AssetInfo::Token { contract_addr } => {
+    //                 if let Ok(entry) = cw20_asset_entry(
+    //                     self.chain.clone(),
+    //                     self.chain_ans_prefix.as_str(),
+    //                     contract_addr,
+    //                 ) {
+    //                     (entry, AssetInfo::cw20(contract_addr.clone()))
+    //                 } else {
+    //                     not_found_assets.push(asset_info.clone());
+    //                     continue;
+    //                 }
+    //             }
+    //             AssetInfo::NativeToken { denom } => {
+    //                 if let Some(entry) = self.chain.rt_handle.block_on(
+    //                     self.chain_registry
+    //                         .resolve_native_asset(self.chain.clone(), denom.clone()),
+    //                 ) {
+    //                     (entry, AssetInfo::native(denom.clone()))
+    //                 } else {
+    //                     not_found_assets.push(asset_info.clone());
+    //                     continue;
+    //                 }
+    //             }
+    //         };
+    //
+    //         self.asset_info_to_name
+    //             .insert(asset_info.clone(), name.clone());
+    //         ans_assets_to_add.push((name, unchecked_info));
+    //     }
+    //
+    //     Ok(ans_assets_to_add)
+    // }
 
-        let mut ans_assets_to_add = Vec::<(String, AssetInfoUnchecked)>::new();
-
-        for asset_info in self.all_asset_infos()? {
-            let (name, unchecked_info) = match &asset_info {
-                AssetInfo::Token { contract_addr } => {
-                    if let Ok(entry) = cw20_asset_entry(
-                        self.chain.clone(),
-                        self.chain_ans_prefix.as_str(),
-                        contract_addr,
-                    ) {
-                        (entry, AssetInfoUnchecked::cw20(contract_addr.clone()))
-                    } else {
-                        not_found_assets.push(asset_info.clone());
-                        continue;
+    fn fetch_asset_infos(&mut self) -> anyhow::Result<Vec<AssetInfo>> {
+        return self
+            .load_pairs()?
+            .iter()
+            .flat_map(|p| p.asset_infos.to_vec())
+            .map(|asset_info| {
+                // we don't use unchecked because these are coming from on-chain data
+                Ok(match &asset_info {
+                    AstroportAssetInfo::Token { contract_addr } => {
+                        AssetInfo::cw20(contract_addr.clone())
                     }
-                }
-                AssetInfo::NativeToken { denom } => {
-                    if let Some(entry) = self.chain.rt_handle.block_on(
-                        self.chain_registry
-                            .resolve_native_asset(self.chain.clone(), denom.clone()),
-                    ) {
-                        (entry, AssetInfoUnchecked::native(denom.clone()))
-                    } else {
-                        not_found_assets.push(asset_info.clone());
-                        continue;
-                    }
-                }
-            };
-
-            self.asset_info_to_name
-                .insert(asset_info.clone(), name.clone());
-            ans_assets_to_add.push((name, unchecked_info));
-        }
-
-        Ok(ans_assets_to_add)
+                    AstroportAssetInfo::NativeToken { denom } => AssetInfo::native(denom.clone()),
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>();
     }
 }
 
@@ -176,7 +180,7 @@ impl DexScraper for AstroportScraper<Daemon> {
         let mut ans_pools_to_add = Vec::<(UncheckedPoolAddress, PoolMetadata)>::new();
         let mut skipped_ans_pools = vec![];
 
-        for pair in self.all_pairs()? {
+        for pair in self.load_pairs()? {
             let pool_id = UncheckedPoolAddress::contract(pair.contract_addr);
 
             let pool_type = match pair.pair_type {
@@ -213,21 +217,4 @@ impl DexScraper for AstroportScraper<Daemon> {
 
         Ok(ans_pools_to_add)
     }
-}
-
-/// Fetch a given cw20 asset entry for the chain.
-/// TODO: move somewhere
-fn cw20_asset_entry(
-    chain: Daemon,
-    chain_ans_prefix: &str,
-    contract_addr: &Addr,
-) -> anyhow::Result<String> {
-    let cw20 =
-        Contract::new(contract_addr.clone().as_str(), chain).with_address(Some(contract_addr));
-
-    // get the name
-    let info: TokenInfoResponse = cw20.query(&Cw20QueryMsg::TokenInfo {})?;
-
-    let name = info.symbol.to_ascii_lowercase();
-    Ok(format!("{}>{}", chain_ans_prefix, name))
 }

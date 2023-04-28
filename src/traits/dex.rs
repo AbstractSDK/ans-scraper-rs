@@ -1,10 +1,10 @@
 use abstract_core::objects::pool_id::UncheckedPoolAddress;
 use abstract_core::objects::PoolMetadata;
 use cosmwasm_std::Addr;
-use cw_asset::AssetInfoUnchecked;
+use cw_asset::AssetInfo;
 
 pub trait AssetSource {
-    fn fetch_asset_infos(&mut self) -> anyhow::Result<Vec<(String, AssetInfoUnchecked)>>;
+    fn fetch_asset_infos(&mut self) -> anyhow::Result<Vec<AssetInfo>>;
 }
 
 pub trait DexId {

@@ -13,6 +13,7 @@ pub struct ChainRegistry {
 }
 
 impl ChainRegistry {
+    // TOOD: new name? ??
     pub async fn new() -> anyhow::Result<Self> {
         let asset_lists = Self::fetch_asset_lists().await?;
         Ok(Self { asset_lists })
