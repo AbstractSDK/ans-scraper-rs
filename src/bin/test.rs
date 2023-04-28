@@ -2,32 +2,17 @@ use clap::Parser;
 
 use cw_orch::{networks::parse_network, networks::ChainInfo, queriers::DaemonQuerier, Daemon};
 
-use ans_scraper_rs::ChainRegistry;
 use tokio::runtime::Runtime;
 
-use ans_scraper_rs::dexes::astroport::AstroportScraper;
-use ans_scraper_rs::traits::dex::AssetSource;
-
-pub const ABSTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
-
-/// Script that registers the first Account in abstract (our Account)
 pub fn astroport_ans(network: ChainInfo) -> anyhow::Result<()> {
     // let network = LOCAL_JUNO;
     let rt = Runtime::new()?;
 
-    let chain = Daemon::builder()
+    let _real_chain = Daemon::builder()
         .chain(network.clone())
         .handle(rt.handle())
         .build()
         .unwrap();
-
-    let _chain_registry = rt.block_on(ChainRegistry::new())?;
-
-    let mut astroport = rt.block_on(AstroportScraper::new(chain, "terra2"));
-
-    let test = astroport.fetch_asset_infos()?;
-
-    println!("{:?}", test);
 
     Ok(())
 }

@@ -44,6 +44,8 @@ sha256 = "1.1.1"
 ibc-chain-registry = { version = "0.23.0" }
 tonic = { version = "0.9.2", features = ["tls", "tls-roots"] }
 
+bimap = "0.6.3"
+lazy_static = "1.4.0"
 
 abstract-core = { version = "0.14", features = ["boot"] }
 abstract-boot = { version = "0.14", features = ["daemon"] }
